@@ -1,0 +1,232 @@
+import os
+import json
+import aiohttp
+from aiohttp import web
+import asyncio
+import re
+import time
+from colorama import init, Fore, Style
+
+init(autoreset=True)
+
+PORT = 8080
+COOKIE_FILE = 'Cookie.txt'
+TIMEOUT = 30
+MAX_CONCURRENT_REQUESTS = 100
+MAX_RETRIES = 1
+
+class Colors:
+    BASE = Fore.WHITE
+    SUCCESS = Fore.GREEN
+    WARNING = Fore.YELLOW
+    ERROR = Fore.RED
+    RESET = Style.RESET_ALL
+
+session_state = {
+    "robloxCookie": "",
+    "csrfToken": "",
+    "userId": None
+}
+
+def validate_cookie(cookie):
+    return cookie and len(cookie) > 100 and "_|WARNING:-DO-NOT-SHARE-THIS." in cookie
+
+async def get_user_id():
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(
+                "https://users.roblox.com/v1/users/authenticated",
+                headers={"Cookie": f".ROBLOSECURITY={session_state['robloxCookie']}"},
+                timeout=TIMEOUT
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return data.get("id")
+        except Exception:
+            pass
+    return None
+
+async def refresh_csrf_token():
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.post(
+                "https://auth.roblox.com/v2/logout",
+                headers={
+                    "Cookie": f".ROBLOSECURITY={session_state['robloxCookie']}",
+                    "User-Agent": "Roblox/WinInet"
+                },
+                timeout=TIMEOUT
+            ) as response:
+                if response.status == 403:
+                    csrf_token = response.headers.get("x-csrf-token")
+                    if csrf_token:
+                        session_state["csrfToken"] = csrf_token
+                        return True
+        except Exception:
+            pass
+    return False
+
+async def fetch_animation(session, animation_id):
+    try:
+        async with session.get(
+            f"https://assetdelivery.roblox.com/v1/asset/?id={animation_id}",
+            headers={
+                "Cookie": f".ROBLOSECURITY={session_state['robloxCookie']}",
+                "Accept": "application/octet-stream",
+                "User-Agent": "Roblox/WinInet"
+            },
+            timeout=TIMEOUT
+        ) as response:
+            if response.status == 200:
+                return await response.read()
+    except Exception as e:
+        print(f"{Colors.WARNING}Error fetching animation ID: {animation_id} ({str(e)}){Colors.RESET}")
+    return None
+
+async def upload_animation(session, animation_data, animation_id, retries=0):
+    if not session_state["csrfToken"]:
+        if not await refresh_csrf_token():
+            return None
+    try:
+        params = {
+            "assetTypeName": "Animation",
+            "name": f"Reupload_{animation_id}_{int(time.time())}",
+            "description": "Automatically reuploaded",
+            "ispublic": "False",
+            "allowComments": "True",
+            "groupId": "",
+            "isGamesAsset": "False"
+        }
+        async with session.post(
+            "https://www.roblox.com/ide/publish/uploadnewanimation",
+            params=params,
+            data=animation_data,
+            headers={
+                "Cookie": f".ROBLOSECURITY={session_state['robloxCookie']}",
+                "X-CSRF-TOKEN": session_state["csrfToken"],
+                "Content-Type": "application/octet-stream",
+                "User-Agent": "Roblox/WinInet",
+                "Referer": "https://www.roblox.com/develop",
+                "Origin": "https://www.roblox.com"
+            },
+            timeout=TIMEOUT
+        ) as response:
+            if response.status == 200:
+                text = await response.text()
+                match = re.search(r"\d{9,}", text)
+                if match:
+                    return match.group(0)
+            elif response.status == 403:
+                if await refresh_csrf_token():
+                    return await upload_animation(session, animation_data, animation_id, retries)
+    except Exception as e:
+        if retries < MAX_RETRIES:
+            await asyncio.sleep(1)
+            return await upload_animation(session, animation_data, animation_id, retries + 1)
+        print(f"{Colors.WARNING}Failed to upload animation ID: {animation_id} ({str(e)}){Colors.RESET}")
+    return None
+
+async def process_animations(animation_ids):
+    total_animations = len(animation_ids)
+    results = [None] * total_animations
+    logs = [None] * total_animations
+    successful_reuploads = 0
+    failed_reuploads = 0
+
+    print(f"{Colors.BASE}Reuploading Animations, This Might Take Minutes...")
+
+    start_time = time.time()
+
+    async with aiohttp.ClientSession() as session:
+        semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
+        tasks = []
+
+        async def process_single_animation(index, anim_id):
+            nonlocal successful_reuploads, failed_reuploads
+            async with semaphore:
+                if not anim_id.isdigit():
+                    log = f"{Colors.WARNING}INVALID ANIMATION ID: {anim_id}{Colors.RESET}"
+                    print(log)
+                    failed_reuploads += 1
+                    return index, None, log
+
+                animation_data = await fetch_animation(session, anim_id)
+                if animation_data:
+                    new_id = await upload_animation(session, animation_data, anim_id)
+                    if new_id:
+                        log = f"{Colors.SUCCESS}SUCCESSFUL REUPLOAD: {anim_id} → {new_id}{Colors.RESET}"
+                        print(log)
+                        successful_reuploads += 1
+                        return index, new_id, log
+                log = f"{Colors.ERROR}FAILED REUPLOAD: {anim_id}{Colors.RESET}"
+                print(log)
+                failed_reuploads += 1
+                return index, None, log
+
+        for i, anim_id in enumerate(animation_ids):
+            tasks.append(process_single_animation(i, anim_id))
+
+        for task in asyncio.as_completed(tasks):
+            index, result, log = await task
+            results[index] = result
+            logs[index] = log
+
+    end_time = time.time()
+
+    print("\n--- FINAL LOGS (IN ORDER) ---")
+    for log in logs:
+        print(log)
+
+    print("\n--- SUMMARY ---")
+    print(f"{Colors.BASE}Total Animations Processed: {total_animations}")
+    print(f"{Colors.SUCCESS}Successful Reuploads: {successful_reuploads}")
+    print(f"{Colors.ERROR}Failed Reuploads: {failed_reuploads}")
+    print(f"{Colors.BASE}Time Taken: {end_time - start_time:.2f} seconds")
+
+    return {anim_id: new_id for anim_id, new_id in zip(animation_ids, results) if new_id}
+
+async def handle_reupload(request):
+    try:
+        post_data = await request.json()
+        animation_ids = post_data.get("animationIds", [])
+        if not animation_ids:
+            return web.json_response({"error": "No animation IDs provided"}, status=400)
+        
+        results = await process_animations(animation_ids)
+        return web.json_response(results, status=200)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+async def initialize_server():
+    if os.path.exists(COOKIE_FILE):
+        with open(COOKIE_FILE, "r") as f:
+            session_state["robloxCookie"] = f.read().strip()
+    if not validate_cookie(session_state["robloxCookie"]):
+        session_state["robloxCookie"] = input("Enter .ROBLOSECURITY cookie: ").strip()
+        if not validate_cookie(session_state["robloxCookie"]):
+            print(f"{Colors.ERROR}Invalid cookie format{Colors.RESET}")
+            exit(1)
+        with open(COOKIE_FILE, "w") as f:
+            f.write(session_state["robloxCookie"])
+    
+    session_state["userId"] = await get_user_id()
+    if not session_state["userId"]:
+        print(f"{Colors.ERROR}Authentication failed{Colors.RESET}")
+        exit(1)
+    if not await refresh_csrf_token():
+        print(f"{Colors.ERROR}CSRF token initialization failed{Colors.RESET}")
+        exit(1)
+    
+    app = web.Application()
+    app.router.add_post("/reupload", handle_reupload)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "localhost", PORT)
+    print(f"{Colors.BASE}Server ready - use the plugin to submit animations{Colors.RESET}")
+    await site.start()
+
+    while True:
+        await asyncio.sleep(3600)
+
+if __name__ == "__main__":
+    asyncio.run(initialize_server())
