@@ -9,224 +9,224 @@ from colorama import init, Fore, Style
 
 init(autoreset=True)
 
-PORT = 8080
-COOKIE_FILE = 'Cookie.txt'
-TIMEOUT = 30
-MAX_CONCURRENT_REQUESTS = 100
-MAX_RETRIES = 1
+P = 8080
+C = 'Cookie.txt'
+T = 30
+MCR = 1000
+MR = 1
 
-class Colors:
-    BASE = Fore.WHITE
-    SUCCESS = Fore.GREEN
-    WARNING = Fore.YELLOW
-    ERROR = Fore.RED
-    RESET = Style.RESET_ALL
+class Cl:
+    B = Fore.WHITE
+    S = Fore.GREEN
+    W = Fore.YELLOW
+    E = Fore.RED
+    R = Style.RESET_ALL
 
-session_state = {
-    "robloxCookie": "",
-    "csrfToken": "",
-    "userId": None
+ss = {
+    "rc": "",
+    "ct": "",
+    "uid": None
 }
 
-def validate_cookie(cookie):
-    return cookie and len(cookie) > 100 and "_|WARNING:-DO-NOT-SHARE-THIS." in cookie
+def vc(c):
+    return c and len(c) > 100 and "_|WARNING:-DO-NOT-SHARE-THIS." in c
 
-async def get_user_id():
-    async with aiohttp.ClientSession() as session:
+async def gui():
+    async with aiohttp.ClientSession() as s:
         try:
-            async with session.get(
+            async with s.get(
                 "https://users.roblox.com/v1/users/authenticated",
-                headers={"Cookie": f".ROBLOSECURITY={session_state['robloxCookie']}"},
-                timeout=TIMEOUT
-            ) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    return data.get("id")
+                headers={"Cookie": f".ROBLOSECURITY={ss['rc']}"},
+                timeout=T
+            ) as r:
+                if r.status == 200:
+                    d = await r.json()
+                    return d.get("id")
         except Exception:
             pass
     return None
 
-async def refresh_csrf_token():
-    async with aiohttp.ClientSession() as session:
+async def rct():
+    async with aiohttp.ClientSession() as s:
         try:
-            async with session.post(
+            async with s.post(
                 "https://auth.roblox.com/v2/logout",
                 headers={
-                    "Cookie": f".ROBLOSECURITY={session_state['robloxCookie']}",
+                    "Cookie": f".ROBLOSECURITY={ss['rc']}",
                     "User-Agent": "Roblox/WinInet"
                 },
-                timeout=TIMEOUT
-            ) as response:
-                if response.status == 403:
-                    csrf_token = response.headers.get("x-csrf-token")
-                    if csrf_token:
-                        session_state["csrfToken"] = csrf_token
+                timeout=T
+            ) as r:
+                if r.status == 403:
+                    ct = r.headers.get("x-csrf-token")
+                    if ct:
+                        ss["ct"] = ct
                         return True
         except Exception:
             pass
     return False
 
-async def fetch_animation(session, animation_id):
+async def fa(s, aid):
     try:
-        async with session.get(
-            f"https://assetdelivery.roblox.com/v1/asset/?id={animation_id}",
+        async with s.get(
+            f"https://assetdelivery.roblox.com/v1/asset/?id={aid}",
             headers={
-                "Cookie": f".ROBLOSECURITY={session_state['robloxCookie']}",
+                "Cookie": f".ROBLOSECURITY={ss['rc']}",
                 "Accept": "application/octet-stream",
                 "User-Agent": "Roblox/WinInet"
             },
-            timeout=TIMEOUT
-        ) as response:
-            if response.status == 200:
-                return await response.read()
+            timeout=T
+        ) as r:
+            if r.status == 200:
+                return await r.read()
     except Exception as e:
-        print(f"{Colors.WARNING}Error fetching animation ID: {animation_id} ({str(e)}){Colors.RESET}")
+        print(f"{Cl.W}Error fetching animation ID: {aid} ({str(e)}){Cl.R}")
     return None
 
-async def upload_animation(session, animation_data, animation_id, retries=0):
-    if not session_state["csrfToken"]:
-        if not await refresh_csrf_token():
+async def ua(s, ad, aid, retries=0):
+    if not ss["ct"]:
+        if not await rct():
             return None
     try:
-        params = {
+        p = {
             "assetTypeName": "Animation",
-            "name": f"Reupload_{animation_id}_{int(time.time())}",
+            "name": f"Reupload_{aid}_{int(time.time())}",
             "description": "Automatically reuploaded",
             "ispublic": "False",
             "allowComments": "True",
             "groupId": "",
             "isGamesAsset": "False"
         }
-        async with session.post(
+        async with s.post(
             "https://www.roblox.com/ide/publish/uploadnewanimation",
-            params=params,
-            data=animation_data,
+            params=p,
+            data=ad,
             headers={
-                "Cookie": f".ROBLOSECURITY={session_state['robloxCookie']}",
-                "X-CSRF-TOKEN": session_state["csrfToken"],
+                "Cookie": f".ROBLOSECURITY={ss['rc']}",
+                "X-CSRF-TOKEN": ss["ct"],
                 "Content-Type": "application/octet-stream",
                 "User-Agent": "Roblox/WinInet",
                 "Referer": "https://www.roblox.com/develop",
                 "Origin": "https://www.roblox.com"
             },
-            timeout=TIMEOUT
-        ) as response:
-            if response.status == 200:
-                text = await response.text()
-                match = re.search(r"\d{9,}", text)
-                if match:
-                    return match.group(0)
-            elif response.status == 403:
-                if await refresh_csrf_token():
-                    return await upload_animation(session, animation_data, animation_id, retries)
+            timeout=T
+        ) as r:
+            if r.status == 200:
+                t = await r.text()
+                m = re.search(r"\d{9,}", t)
+                if m:
+                    return m.group(0)
+            elif r.status == 403:
+                if await rct():
+                    return await ua(s, ad, aid, retries)
     except Exception as e:
-        if retries < MAX_RETRIES:
+        if retries < MR:
             await asyncio.sleep(1)
-            return await upload_animation(session, animation_data, animation_id, retries + 1)
-        print(f"{Colors.WARNING}Failed to upload animation ID: {animation_id} ({str(e)}){Colors.RESET}")
+            return await ua(s, ad, aid, retries + 1)
+        print(f"{Cl.W}Failed to upload animation ID: {aid} ({str(e)}){Cl.R}")
     return None
 
-async def process_animations(animation_ids):
-    total_animations = len(animation_ids)
-    results = [None] * total_animations
-    logs = [None] * total_animations
-    successful_reuploads = 0
-    failed_reuploads = 0
+async def pa(aids):
+    ta = len(aids)
+    res = [None] * ta
+    logs = [None] * ta
+    sr = 0
+    fr = 0
 
-    print(f"{Colors.BASE}Reuploading Animations, This Might Take Minutes...")
+    print(f"{Cl.B}Reuploading Animations, This Might Take Minutes...")
 
-    start_time = time.time()
+    st = time.time()
 
-    async with aiohttp.ClientSession() as session:
-        semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
+    async with aiohttp.ClientSession() as s:
+        sm = asyncio.Semaphore(MCR)
         tasks = []
 
-        async def process_single_animation(index, anim_id):
-            nonlocal successful_reuploads, failed_reuploads
-            async with semaphore:
-                if not anim_id.isdigit():
-                    log = f"{Colors.WARNING}INVALID ANIMATION ID: {anim_id}{Colors.RESET}"
+        async def psa(i, aid):
+            nonlocal sr, fr
+            async with sm:
+                if not aid.isdigit():
+                    log = f"{Cl.W}INVALID ANIMATION ID: {aid}{Cl.R}"
                     print(log)
-                    failed_reuploads += 1
-                    return index, None, log
+                    fr += 1
+                    return i, None, log
 
-                animation_data = await fetch_animation(session, anim_id)
-                if animation_data:
-                    new_id = await upload_animation(session, animation_data, anim_id)
-                    if new_id:
-                        log = f"{Colors.SUCCESS}SUCCESSFUL REUPLOAD: {anim_id} → {new_id}{Colors.RESET}"
+                ad = await fa(s, aid)
+                if ad:
+                    nid = await ua(s, ad, aid)
+                    if nid:
+                        log = f"{Cl.S}SUCCESSFUL REUPLOAD: {aid} → {nid}{Cl.R}"
                         print(log)
-                        successful_reuploads += 1
-                        return index, new_id, log
-                log = f"{Colors.ERROR}FAILED REUPLOAD: {anim_id}{Colors.RESET}"
+                        sr += 1
+                        return i, nid, log
+                log = f"{Cl.E}FAILED REUPLOAD: {aid}{Cl.R}"
                 print(log)
-                failed_reuploads += 1
-                return index, None, log
+                fr += 1
+                return i, None, log
 
-        for i, anim_id in enumerate(animation_ids):
-            tasks.append(process_single_animation(i, anim_id))
+        for idx, aid in enumerate(aids):
+            tasks.append(psa(idx, aid))
 
         for task in asyncio.as_completed(tasks):
-            index, result, log = await task
-            results[index] = result
-            logs[index] = log
+            idx, result, log = await task
+            res[idx] = result
+            logs[idx] = log
 
-    end_time = time.time()
+    et = time.time()
 
     print("\n--- FINAL LOGS (IN ORDER) ---")
     for log in logs:
         print(log)
 
     print("\n--- SUMMARY ---")
-    print(f"{Colors.BASE}Total Animations Processed: {total_animations}")
-    print(f"{Colors.SUCCESS}Successful Reuploads: {successful_reuploads}")
-    print(f"{Colors.ERROR}Failed Reuploads: {failed_reuploads}")
-    print(f"{Colors.BASE}Time Taken: {end_time - start_time:.2f} seconds")
+    print(f"{Cl.B}Total Animations Processed: {ta}")
+    print(f"{Cl.S}Successful Reuploads: {sr}")
+    print(f"{Cl.E}Failed Reuploads: {fr}")
+    print(f"{Cl.B}Time Taken: {et - st:.2f} seconds")
 
-    return {anim_id: new_id for anim_id, new_id in zip(animation_ids, results) if new_id}
+    return {aid: nid for aid, nid in zip(aids, res) if nid}
 
-async def handle_reupload(request):
+async def hr(request):
     try:
-        post_data = await request.json()
-        animation_ids = post_data.get("animationIds", [])
-        if not animation_ids:
+        pd = await request.json()
+        aids = pd.get("animationIds", [])
+        if not aids:
             return web.json_response({"error": "No animation IDs provided"}, status=400)
         
-        results = await process_animations(animation_ids)
+        results = await pa(aids)
         return web.json_response(results, status=200)
     except Exception as e:
         return web.json_response({"error": str(e)}, status=500)
 
-async def initialize_server():
-    if os.path.exists(COOKIE_FILE):
-        with open(COOKIE_FILE, "r") as f:
-            session_state["robloxCookie"] = f.read().strip()
-    if not validate_cookie(session_state["robloxCookie"]):
-        session_state["robloxCookie"] = input("Enter .ROBLOSECURITY cookie: ").strip()
-        if not validate_cookie(session_state["robloxCookie"]):
-            print(f"{Colors.ERROR}Invalid cookie format{Colors.RESET}")
+async def is_():
+    if os.path.exists(C):
+        with open(C, "r") as f:
+            ss["rc"] = f.read().strip()
+    if not vc(ss["rc"]):
+        ss["rc"] = input("Enter .ROBLOSECURITY cookie: ").strip()
+        if not vc(ss["rc"]):
+            print(f"{Cl.E}Invalid cookie format{Cl.R}")
             exit(1)
-        with open(COOKIE_FILE, "w") as f:
-            f.write(session_state["robloxCookie"])
+        with open(C, "w") as f:
+            f.write(ss["rc"])
     
-    session_state["userId"] = await get_user_id()
-    if not session_state["userId"]:
-        print(f"{Colors.ERROR}Authentication failed{Colors.RESET}")
+    ss["uid"] = await gui()
+    if not ss["uid"]:
+        print(f"{Cl.E}Authentication failed{Cl.R}")
         exit(1)
-    if not await refresh_csrf_token():
-        print(f"{Colors.ERROR}CSRF token initialization failed{Colors.RESET}")
+    if not await rct():
+        print(f"{Cl.E}CSRF token initialization failed{Cl.R}")
         exit(1)
     
     app = web.Application()
-    app.router.add_post("/reupload", handle_reupload)
+    app.router.add_post("/reupload", hr)
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, "localhost", PORT)
-    print(f"{Colors.BASE}Server ready - use the plugin to submit animations{Colors.RESET}")
+    site = web.TCPSite(runner, "localhost", P)
+    print(f"{Cl.B}Server ready - use the plugin to submit animations{Cl.R}")
     await site.start()
 
     while True:
         await asyncio.sleep(3600)
 
 if __name__ == "__main__":
-    asyncio.run(initialize_server())
+    asyncio.run(is_())
